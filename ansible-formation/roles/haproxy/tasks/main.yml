@@ -1,26 +1,7 @@
 #SPDX-License-Identifier: MIT-0
 ---
 # tasks file for haproxy
-- name: Installer HAProxy + curl
-  ansible.builtin.apt:
-    name: [haproxy, curl]
-    state: present
-    update_cache: yes
-
-- name: Déployer la conf HAProxy
-  ansible.builtin.template:
-    src: haproxy.cfg.j2
-    dest: /etc/haproxy/haproxy.cfg
-    mode: '0644'
-
-- name: Relancer HAProxy daemon
-  ansible.builtin.shell: |
-    pkill -x haproxy || true
-    sleep 1
-    haproxy -f /etc/haproxy/haproxy.cfg -D -p /run/haproxy.pid
-  args: { executable: /bin/bash }
-
-# - name: Test rapide depuis le LB
-#   ansible.builtin.shell: |
-#     for i in {1..6}; do curl -s -o /dev/null -w "web$i=%{http_code} " http://ansible-web$i/; done; echo
-#   changed_when: false
+- name: Executer la task si le hostname correspond
+  ansible.builtin.include_tasks:
+    file: setup.yml
+  when: "'loadbalancer' in group_names"

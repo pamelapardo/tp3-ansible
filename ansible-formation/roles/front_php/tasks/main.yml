@@ -1,0 +1,91 @@
+#SPDX-License-Identifier: MIT-0
+---
+# tasks file for front_php
+
+  tasks:
+    - name: Installer PHP et extensions
+      ansible.builtin.apt:
+        name:
+          - php-fpm
+          - php-cli
+          - php-mysql
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: S'assurer que le docroot existe
+      ansible.builtin.file:
+        path: "{{ app_docroot }}"
+        state: directory
+        mode: '0755'
+
+    - name: Détecter la version PHP (X.Y)
+      ansible.builtin.command: php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;'
+      register: phpver
+      changed_when: false
+
+    - name: Définir chemins php-fpm
+      ansible.builtin.set_fact:
+        php_version: "{{ phpver.stdout }}"
+        php_fpm_bin_guess: "/usr/sbin/php-fpm{{ phpver.stdout }}"
+        php_fpm_conf: "/etc/php/{{ phpver.stdout }}/fpm/php-fpm.conf"
+        php_fpm_pool_www: "/etc/php/{{ phpver.stdout }}/fpm/pool.d/www.conf"
+
+    - name: Choisir le binaire php-fpm
+      ansible.builtin.shell: 'command -v php-fpm || echo "{{ php_fpm_bin_guess }}"'
+      args: { executable: /bin/bash }
+      register: phpfpm_picker
+      changed_when: false
+
+    - name: Mémoriser le binaire choisi
+      ansible.builtin.set_fact:
+        php_fpm_bin: "{{ phpfpm_picker.stdout | trim }}"
+
+    - name: Configurer php-fpm sur 127.0.0.1:9000
+      ansible.builtin.lineinfile:
+        path: "{{ php_fpm_pool_www }}"
+        regexp: '^listen\s*='
+        line: 'listen = 127.0.0.1:9000'
+        backup: yes
+
+    - name: Déployer la conf Nginx (fastcgi vers 127.0.0.1:9000)
+      ansible.builtin.template:
+        src: nginx-php-default.conf.j2
+        dest: /etc/nginx/sites-available/default
+        mode: '0644'
+
+    - name: Déployer l'application index.php
+      ansible.builtin.template:
+        src: index.php.j2
+        dest: "{{ app_docroot }}/index.php"
+        mode: '0644'
+      vars:
+        DB_HOST: "{{ db_app_host }}"
+        DB_NAME: "{{ db_app_name }}"
+        DB_USER: "{{ db_app_user }}"
+        DB_PASS: "{{ db_app_pass }}"
+
+    - name: Recharger/relancer Nginx
+      ansible.builtin.shell: "nginx -t && (nginx -s reload || nginx)"
+      args: { executable: /bin/bash }
+      changed_when: false
+
+    - name: Lancer/relancer php-fpm
+      ansible.builtin.shell: |
+        set -e
+        ver="{{ php_version }}"
+        svc="/etc/init.d/php${ver}-fpm"
+        if [ -x "$svc" ]; then
+          "$svc" stop || true
+          "$svc" start
+        else
+          pkill -f 'php-fpm.*master' || true
+          (command -v php-fpm || echo "/usr/sbin/php-fpm${ver}") && --fpm-config "/etc/php/${ver}/fpm/php-fpm.conf" --daemonize
+        fi
+      args: { executable: /bin/bash }
+
+    - name: Vérif HTTP 200 en local
+      ansible.builtin.shell: 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1/index.php'
+      register: http_code
+      changed_when: false
+      failed_when: http_code.stdout != "200"

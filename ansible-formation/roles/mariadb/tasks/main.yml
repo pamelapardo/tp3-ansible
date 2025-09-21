@@ -1,0 +1,70 @@
+#SPDX-License-Identifier: MIT-0
+---
+# tasks file formariadb 
+- name: Installer MariaDB + client + driver
+  ansible.builtin.apt:
+    name:
+      - mariadb-server
+      - mariadb-client
+      - python3-pymysql
+      - curl
+    state: present
+    update_cache: yes
+
+- name: Démarrer MariaDB si pas déjà lancé (mode conteneur)
+  ansible.builtin.shell: pgrep -x mysqld || mysqld_safe --datadir=/var/lib/mysql &
+  args: { executable: /bin/bash }
+
+- name: Attendre que le socket MySQL soit prêt
+  ansible.builtin.wait_for:
+    path: "{{ mysql_socket }}"
+    timeout: 60
+
+- name: Écouter sur toutes les interfaces
+  ansible.builtin.lineinfile:
+    path: "{{ mariadb_cfg }}"
+    regexp: '^bind-address\s*='
+    line: 'bind-address = 0.0.0.0'
+    backup: yes
+  register: cfg_bind
+
+- name: Forcer port 3306 + pas de skip-networking
+  ansible.builtin.blockinfile:
+    path: "{{ mariadb_cfg }}"
+    marker: "# {mark} ANSIBLE MANAGED"
+    block: |
+      port = 3306
+      skip-networking = 0
+  register: cfg_net
+
+- name: Redémarrer MariaDB si conf modifiée (mode conteneur)
+  ansible.builtin.shell: |
+    if pgrep -x mysqld >/dev/null; then
+      pkill -x mysqld || true
+      sleep 2
+    fi
+    mysqld_safe --datadir=/var/lib/mysql &
+    sleep 3
+  args: { executable: /bin/bash }
+  when: cfg_bind.changed or cfg_net.changed
+
+- name: Vérifier l’écoute 0.0.0.0:3306
+  ansible.builtin.shell: ss -ltn | grep -E 'LISTEN.+:3306\b'
+  changed_when: false
+
+- name: Créer la base
+  community.mysql.mysql_db:
+    name: "{{ db_app_name }}"
+    state: present
+    login_unix_socket: "{{ mysql_socket }}"
+    check_implicit_admin: true
+
+- name: Créer l’utilisateur applicatif
+  community.mysql.mysql_user:
+    name: "{{ db_app_user }}"
+    password: "{{ db_app_pass }}"
+    host: "%"
+    priv: "{{ db_app_name }}.*:ALL"
+    state: present
+    login_unix_socket: "{{ mysql_socket }}"
+    check_implicit_admin: true

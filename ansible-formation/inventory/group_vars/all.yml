@@ -1,0 +1,12 @@
+app_docroot: /var/www/html
+
+# paramètres BDD utilisés par l'app PHP
+db_app_host: db1
+db_app_name: myapp
+db_app_user: webuser
+db_app_pass: webpass
+
+
+# chemins/paramètres MariaDB dans le conteneur
+mysql_socket: /var/run/mysqld/mysqld.sock
+mariadb_cfg: /etc/mysql/mariadb.conf.d/50-server.cnf

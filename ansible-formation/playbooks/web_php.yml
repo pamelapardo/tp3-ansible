@@ -1,0 +1,7 @@
+---
+- name: PHP-FPM + app login/inscription
+  hosts: web
+  gather_facts: false
+
+  roles:
+    - roles/front_php

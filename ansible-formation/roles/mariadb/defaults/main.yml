@@ -1,0 +1,4 @@
+#SPDX-License-Identifier: MIT-0
+---
+# defaults file for mariadb
+ansible_python_interpreter: /usr/bin/python3

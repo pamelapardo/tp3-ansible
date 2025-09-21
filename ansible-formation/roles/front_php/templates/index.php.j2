@@ -1,0 +1,80 @@
+<?php
+$DB_HOST = "{{ DB_HOST }}";
+$DB_NAME = "{{ DB_NAME }}";
+$DB_USER = "{{ DB_USER }}";
+$DB_PASS = "{{ DB_PASS }}";
+
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try {
+    $db = new mysqli($DB_HOST, $DB_USER, $DB_PASS, $DB_NAME);
+    $db->set_charset('utf8mb4');
+} catch (Exception $e) {
+    http_response_code(500);
+    echo "<h1>Erreur BDD</h1><pre>" . htmlspecialchars($e->getMessage()) . "</pre>";
+    exit;
+}
+
+$db->query("CREATE TABLE IF NOT EXISTS users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(64) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+$info = "";
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $act = $_POST['action'] ?? '';
+    $u = trim($_POST['username'] ?? '');
+    $p = trim($_POST['password'] ?? '');
+
+    if ($act === 'register') {
+        if ($u !== '' && $p !== '') {
+            $hash = password_hash($p, PASSWORD_DEFAULT);
+            $stmt = $db->prepare("INSERT INTO users(username,password_hash) VALUES(?,?)");
+            try { $stmt->bind_param("ss", $u, $hash); $stmt->execute(); $info = "Compte créé: ".htmlspecialchars($u); }
+            catch (Exception $e) { $info = "Erreur: ".(str_contains($e->getMessage(),'Duplicate') ? "Utilisateur déjà existant" : "Création impossible"); }
+        } else { $info = "Champs vides"; }
+    } elseif ($act === 'login') {
+        $stmt = $db->prepare("SELECT password_hash FROM users WHERE username=?");
+        $stmt->bind_param("s", $u); $stmt->execute(); $stmt->bind_result($h);
+        if ($stmt->fetch() && password_verify($p, $h)) $info = "Succès: connecté en tant que ".htmlspecialchars($u);
+        else $info = "Mauvais identifiants";
+    }
+}
+?>
+<!doctype html><html lang="fr"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Login / Register</title>
+<style>
+body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0f172a;color:#e2e8f0;display:grid;place-items:center;height:100vh;margin:0}
+.card{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.4);width:min(420px,92vw)}
+h1{margin:0 0 12px;font-size:22px}
+form{display:grid;gap:8px;margin:12px 0}
+input,button{padding:10px 12px;border-radius:10px;border:1px solid #374151;background:#0b1220;color:#e5e7eb}
+button{background:#2563eb;border-color:#1d4ed8;cursor:pointer}
+button:hover{filter:brightness(1.1)}
+.muted{color:#94a3b8;font-size:13px}
+.ok{background:#064e3b;border-color:#065f46}
+.err{background:#7f1d1d;border-color:#991b1b}
+</style></head><body><div class="card">
+<h1>App demo ({{ inventory_hostname }})</h1>
+<?php if ($info): ?><p class="<?= str_starts_with($info,'Succès')||str_starts_with($info,'Compte créé')?'ok':'err'?>" style="padding:10px;border-radius:10px"><?= htmlspecialchars($info) ?></p><?php endif; ?>
+
+<h2>Se connecter</h2>
+<form method="post">
+  <input type="hidden" name="action" value="login">
+  <input name="username" placeholder="Utilisateur" required>
+  <input name="password" placeholder="Mot de passe" type="password" required>
+  <button>Connexion</button>
+</form>
+
+<h2>Créer un compte</h2>
+<form method="post">
+  <input type="hidden" name="action" value="register">
+  <input name="username" placeholder="Utilisateur" required>
+  <input name="password" placeholder="Mot de passe" type="password" required>
+  <button>Inscription</button>
+</form>
+
+<p class="muted">DB: <?= htmlspecialchars("$DB_USER@$DB_HOST/$DB_NAME") ?></p>
+</div></body></html>

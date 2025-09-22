@@ -1,0 +1,109 @@
+---
+# Clean PHP + Nginx installation tasks
+- name: Install Nginx, PHP and required packages
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - php-fpm
+      - php-mysql
+      - php-cli
+    state: present
+    update_cache: yes
+
+- name: Create web directory
+  ansible.builtin.file:
+    path: /var/www/html
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+
+- name: Get PHP version for configuration
+  ansible.builtin.shell: php -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;"
+  register: php_version
+  changed_when: false
+
+- name: Configure PHP-FPM pool
+  ansible.builtin.lineinfile:
+    path: "/etc/php/{{ php_version.stdout }}/fpm/pool.d/www.conf"
+    regexp: '^listen\s*='
+    line: 'listen = 127.0.0.1:9000'
+    backup: yes
+  register: php_pool_config
+
+- name: Configure Nginx default site
+  ansible.builtin.copy:
+    content: |
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          
+          root /var/www/html;
+          index index.php index.html;
+          server_name _;
+          
+          location / {
+              try_files $uri $uri/ /index.php$is_args$args;
+          }
+          
+          location ~ \.php$ {
+              include snippets/fastcgi-php.conf;
+              fastcgi_pass 127.0.0.1:9000;
+              fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+              include fastcgi_params;
+          }
+          
+          location ~ /\.ht {
+              deny all;
+          }
+      }
+    dest: /etc/nginx/sites-available/default
+    backup: yes
+  register: nginx_config
+
+- name: Deploy PHP application
+  ansible.builtin.template:
+    src: index.php.j2
+    dest: /var/www/html/index.php
+    owner: www-data
+    group: www-data
+    mode: '0644'
+  vars:
+    db_host: "{{ db_app_host }}"
+    db_name: "{{ db_app_name }}"
+    db_user: "{{ db_app_user }}"
+    db_pass: "{{ db_app_pass }}"
+
+- name: Start and enable PHP-FPM
+  ansible.builtin.service:
+    name: "php{{ php_version.stdout }}-fpm"
+    state: restarted
+    enabled: yes
+
+- name: Start and enable Nginx
+  ansible.builtin.service:
+    name: nginx
+    state: restarted
+    enabled: yes
+
+- name: Wait for services to be ready
+  ansible.builtin.wait_for:
+    port: "{{ item }}"
+    host: 127.0.0.1
+    timeout: 30
+  loop:
+    - 80
+    - 9000
+
+- name: Test PHP application
+  ansible.builtin.uri:
+    url: "http://127.0.0.1/"
+    method: GET
+    status_code: 200
+  register: app_test
+  retries: 3
+  delay: 5
+
+- name: Show application test result
+  ansible.builtin.debug:
+    msg: "Application test: {{ 'SUCCESS - App is accessible' if app_test.status == 200 else 'FAILED' }}"

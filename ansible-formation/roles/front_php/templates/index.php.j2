@@ -1,80 +1,345 @@
 <?php
-$DB_HOST = "{{ DB_HOST }}";
-$DB_NAME = "{{ DB_NAME }}";
-$DB_USER = "{{ DB_USER }}";
-$DB_PASS = "{{ DB_PASS }}";
+// Database connection settings
+$db_host = "{{ db_host }}";
+$db_name = "{{ db_name }}";
+$db_user = "{{ db_user }}";
+$db_pass = "{{ db_pass }}";
 
-mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$message = "";
+$user_logged_in = false;
+$logged_in_user = "";
+
+// Connect to database
 try {
-    $db = new mysqli($DB_HOST, $DB_USER, $DB_PASS, $DB_NAME);
-    $db->set_charset('utf8mb4');
-} catch (Exception $e) {
-    http_response_code(500);
-    echo "<h1>Erreur BDD</h1><pre>" . htmlspecialchars($e->getMessage()) . "</pre>";
-    exit;
+    $pdo = new PDO("mysql:host=$db_host;dbname=$db_name;charset=utf8mb4", $db_user, $db_pass);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+    $message = "Database connection failed: " . htmlspecialchars($e->getMessage());
 }
 
-$db->query("CREATE TABLE IF NOT EXISTS users (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  username VARCHAR(64) UNIQUE NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-
-$info = "";
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $act = $_POST['action'] ?? '';
-    $u = trim($_POST['username'] ?? '');
-    $p = trim($_POST['password'] ?? '');
-
-    if ($act === 'register') {
-        if ($u !== '' && $p !== '') {
-            $hash = password_hash($p, PASSWORD_DEFAULT);
-            $stmt = $db->prepare("INSERT INTO users(username,password_hash) VALUES(?,?)");
-            try { $stmt->bind_param("ss", $u, $hash); $stmt->execute(); $info = "Compte créé: ".htmlspecialchars($u); }
-            catch (Exception $e) { $info = "Erreur: ".(str_contains($e->getMessage(),'Duplicate') ? "Utilisateur déjà existant" : "Création impossible"); }
-        } else { $info = "Champs vides"; }
-    } elseif ($act === 'login') {
-        $stmt = $db->prepare("SELECT password_hash FROM users WHERE username=?");
-        $stmt->bind_param("s", $u); $stmt->execute(); $stmt->bind_result($h);
-        if ($stmt->fetch() && password_verify($p, $h)) $info = "Succès: connecté en tant que ".htmlspecialchars($u);
-        else $info = "Mauvais identifiants";
+// Handle form submissions
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($pdo)) {
+    $action = $_POST['action'] ?? '';
+    $username = trim($_POST['username'] ?? '');
+    $password = trim($_POST['password'] ?? '');
+    
+    if (empty($username) || empty($password)) {
+        $message = "Please fill in both username and password.";
+    } else {
+        if ($action === 'register') {
+            try {
+                // Check if user already exists
+                $stmt = $pdo->prepare("SELECT id FROM users WHERE username = ?");
+                $stmt->execute([$username]);
+                
+                if ($stmt->fetch()) {
+                    $message = "Username already exists. Please choose a different one.";
+                } else {
+                    // Register new user
+                    $password_hash = password_hash($password, PASSWORD_DEFAULT);
+                    $stmt = $pdo->prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)");
+                    $stmt->execute([$username, $password_hash]);
+                    $message = "Registration successful! You can now sign in.";
+                }
+            } catch (PDOException $e) {
+                $message = "Registration failed: " . htmlspecialchars($e->getMessage());
+            }
+        } elseif ($action === 'login') {
+            try {
+                // Check user credentials
+                $stmt = $pdo->prepare("SELECT username, password_hash FROM users WHERE username = ?");
+                $stmt->execute([$username]);
+                $user = $stmt->fetch();
+                
+                if ($user && password_verify($password, $user['password_hash'])) {
+                    $user_logged_in = true;
+                    $logged_in_user = htmlspecialchars($user['username']);
+                    $message = "Welcome back, $logged_in_user!";
+                } else {
+                    $message = "Invalid username or password.";
+                }
+            } catch (PDOException $e) {
+                $message = "Login failed: " . htmlspecialchars($e->getMessage());
+            }
+        }
     }
 }
 ?>
-<!doctype html><html lang="fr"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Login / Register</title>
-<style>
-body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0f172a;color:#e2e8f0;display:grid;place-items:center;height:100vh;margin:0}
-.card{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.4);width:min(420px,92vw)}
-h1{margin:0 0 12px;font-size:22px}
-form{display:grid;gap:8px;margin:12px 0}
-input,button{padding:10px 12px;border-radius:10px;border:1px solid #374151;background:#0b1220;color:#e5e7eb}
-button{background:#2563eb;border-color:#1d4ed8;cursor:pointer}
-button:hover{filter:brightness(1.1)}
-.muted{color:#94a3b8;font-size:13px}
-.ok{background:#064e3b;border-color:#065f46}
-.err{background:#7f1d1d;border-color:#991b1b}
-</style></head><body><div class="card">
-<h1>App demo ({{ inventory_hostname }})</h1>
-<?php if ($info): ?><p class="<?= str_starts_with($info,'Succès')||str_starts_with($info,'Compte créé')?'ok':'err'?>" style="padding:10px;border-radius:10px"><?= htmlspecialchars($info) ?></p><?php endif; ?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Authentication System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: "Charter", "Georgia", "Times New Roman", serif;
+            background: linear-gradient(135deg, #f7f5f2 0%, #ede8e2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: #2f2721;
+        }
+        
+        .container {
+            background: #ffffff;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(47, 39, 33, 0.08);
+            max-width: 420px;
+            width: 100%;
+            border: 1px solid rgba(255, 138, 76, 0.1);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        
+        .header h1 {
+            color: #2f2721;
+            margin-bottom: 8px;
+            font-size: 1.875rem;
+            font-weight: 400;
+            letter-spacing: -0.025em;
+        }
+        
+        .server-info {
+            color: #8b7355;
+            font-size: 0.875rem;
+            background: rgba(255, 138, 76, 0.05);
+            padding: 12px 16px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255, 138, 76, 0.1);
+        }
+        
+        .message {
+            padding: 16px 20px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+            text-align: center;
+            font-weight: 400;
+            font-size: 0.9rem;
+        }
+        
+        .message.success {
+            background: rgba(34, 197, 94, 0.1);
+            color: #16653e;
+            border: 1px solid rgba(34, 197, 94, 0.2);
+        }
+        
+        .message.error {
+            background: rgba(239, 68, 68, 0.1);
+            color: #991b1b;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+        
+        .success-container {
+            text-align: center;
+        }
+        
+        .success-container h2 {
+            color: #22c55e;
+            margin-bottom: 24px;
+            font-size: 1.5rem;
+            font-weight: 400;
+        }
+        
+        .user-welcome {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            color: white;
+            padding: 32px 24px;
+            border-radius: 16px;
+            margin: 24px 0;
+            box-shadow: 0 4px 20px rgba(34, 197, 94, 0.25);
+        }
+        
+        .user-welcome h3 {
+            font-size: 1.25rem;
+            font-weight: 400;
+            margin-bottom: 8px;
+        }
+        
+        .form-section {
+            margin-bottom: 32px;
+        }
+        
+        .form-section h2 {
+            color: #2f2721;
+            margin-bottom: 20px;
+            font-size: 1.25rem;
+            font-weight: 400;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 16px 18px;
+            border: 2px solid #e5e2de;
+            border-radius: 12px;
+            font-size: 16px;
+            font-family: inherit;
+            transition: all 0.2s ease;
+            background: #fafaf9;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #F8D45D;
+            box-shadow: 0 0 0 3px rgba(255, 138, 76, 0.1);
+            background: #ffffff;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 16px 24px;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 500;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            letter-spacing: 0.025em;
+        }
+        
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #F8D45D, #f97316);
+            color: white;
+            box-shadow: 0 4px 16px rgba(255, 138, 76, 0.3);
+        }
+        
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #f97316, #ea580c);
+        }
+        
+        .btn-secondary {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            color: white;
+            box-shadow: 0 4px 16px rgba(34, 197, 94, 0.3);
+        }
+        
+        .btn-secondary:hover {
+            background: linear-gradient(135deg, #16a34a, #15803d);
+        }
+        
+        .btn-logout {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            margin-top: 20px;
+            box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3);
+        }
+        
+        .btn-logout:hover {
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+        }
+        
+        .divider {
+            text-align: center;
+            margin: 28px 0;
+            position: relative;
+        }
+        
+        .divider:before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #d6d3d1, transparent);
+        }
+        
+        .divider span {
+            background: white;
+            padding: 0 20px;
+            color: #8b7355;
+            font-size: 0.875rem;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Authentication System</h1>
+            <h2 style="color: #667eea; margin: 15px 0; font-size: 1.4rem;">
+                Connected to: {{ inventory_hostname }}
+            </h2>
+            <div class="server-info">
+                Server: {{ inventory_hostname }}<br>
+                Database: {{ db_name }}@{{ db_host }}
+            </div>
+        </div>
 
-<h2>Se connecter</h2>
-<form method="post">
-  <input type="hidden" name="action" value="login">
-  <input name="username" placeholder="Utilisateur" required>
-  <input name="password" placeholder="Mot de passe" type="password" required>
-  <button>Connexion</button>
-</form>
+        <?php if ($user_logged_in): ?>
+            <div class="success-container">
+                <h2>Login Successful!</h2>
+                <div class="user-welcome">
+                    <h3><?= $logged_in_user ?> is now connected</h3>
+                    <p>Welcome to the system!</p>
+                </div>
+                <form method="post">
+                    <input type="hidden" name="action" value="logout">
+                    <button type="submit" class="btn btn-logout">Logout</button>
+                </form>
+            </div>
+        <?php else: ?>
+            <?php if (!empty($message)): ?>
+                <div class="message <?= (strpos($message, 'successful') !== false || strpos($message, 'Welcome') !== false) ? 'success' : 'error' ?>">
+                    <?= htmlspecialchars($message) ?>
+                </div>
+            <?php endif; ?>
 
-<h2>Créer un compte</h2>
-<form method="post">
-  <input type="hidden" name="action" value="register">
-  <input name="username" placeholder="Utilisateur" required>
-  <input name="password" placeholder="Mot de passe" type="password" required>
-  <button>Inscription</button>
-</form>
+            <div class="form-section">
+                <h2>Sign In</h2>
+                <form method="post">
+                    <input type="hidden" name="action" value="login">
+                    <div class="form-group">
+                        <input type="text" name="username" placeholder="Username" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="password" name="password" placeholder="Password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Sign In</button>
+                </form>
+            </div>
 
-<p class="muted">DB: <?= htmlspecialchars("$DB_USER@$DB_HOST/$DB_NAME") ?></p>
-</div></body></html>
+            <div class="divider">
+                <span>or</span>
+            </div>
+
+            <div class="form-section">
+                <h2>Create Account</h2>
+                <form method="post">
+                    <input type="hidden" name="action" value="register">
+                    <div class="form-group">
+                        <input type="text" name="username" placeholder="Choose Username" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="password" name="password" placeholder="Choose Password" required>
+                    </div>
+                    <button type="submit" class="btn btn-secondary">Register</button>
+                </form>
+            </div>
+        <?php endif; ?>
+    </div>
+</body>
+</html>

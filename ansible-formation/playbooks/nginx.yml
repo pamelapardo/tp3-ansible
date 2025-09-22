@@ -1,7 +1,0 @@
-- name: Installer et configurer Nginx
-  hosts: web
-  gather_facts: false
-
-  roles:
-    - roles/nginx
-        

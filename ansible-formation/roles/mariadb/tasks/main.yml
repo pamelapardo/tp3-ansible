@@ -4,4 +4,4 @@
 - name: Executer la task si le hostname correspond
   ansible.builtin.include_tasks:
     file: setup.yml
-  when: "'web' in group_names"
+  when: "'database' in group_names"

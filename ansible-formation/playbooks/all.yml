@@ -1,10 +1,9 @@
 ---
-- name: Installer et configurer MariaDB
+- name: Installer et configurer tous les conteneurs
   hosts: all
   gather_facts: false
 
   roles:
     - roles/mariadb
-    # - roles/nginx
     - roles/front_php
     - roles/haproxy

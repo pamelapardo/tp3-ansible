@@ -1,26 +1,148 @@
-#SPDX-License-Identifier: MIT-0
 ---
-# tasks file for haproxy
-- name: Installer HAProxy + curl
+# HAProxy Load Balancer Installation Tasks
+- name: Install HAProxy
   ansible.builtin.apt:
-    name: [haproxy, curl]
+    name:
+      - haproxy
+      - curl
     state: present
     update_cache: yes
 
-- name: Déployer la conf HAProxy
-  ansible.builtin.template:
-    src: haproxy.cfg.j2
+- name: Backup original HAProxy configuration
+  ansible.builtin.copy:
+    src: /etc/haproxy/haproxy.cfg
+    dest: /etc/haproxy/haproxy.cfg.backup
+    remote_src: yes
+    backup: yes
+  ignore_errors: yes
+
+- name: Configure HAProxy for web load balancing
+  ansible.builtin.copy:
+    content: |
+      global
+          daemon
+          user haproxy
+          group haproxy
+          log stdout local0 info
+          chroot /var/lib/haproxy
+          stats socket /run/haproxy/admin.sock mode 660 level admin
+          stats timeout 30s
+
+      defaults
+          mode http
+          log global
+          option httplog
+          option dontlognull
+          option log-health-checks
+          option forwardfor
+          option http-server-close
+          timeout connect 5000
+          timeout client  50000
+          timeout server  50000
+          errorfile 400 /etc/haproxy/errors/400.http
+          errorfile 403 /etc/haproxy/errors/403.http
+          errorfile 408 /etc/haproxy/errors/408.http
+          errorfile 500 /etc/haproxy/errors/500.http
+          errorfile 502 /etc/haproxy/errors/502.http
+          errorfile 503 /etc/haproxy/errors/503.http
+          errorfile 504 /etc/haproxy/errors/504.http
+
+      # Frontend - receives requests from clients
+      frontend web_frontend
+          bind *:80
+          default_backend web_servers
+
+      # Backend - distributes requests to web servers
+      backend web_servers
+          balance roundrobin
+          option httpchk GET /
+          http-check expect status 200
+          server web1 web1:80 check
+          server web2 web2:80 check
+          server web3 web3:80 check
+
+      # Statistics page
+      frontend stats
+          bind *:8404
+          stats enable
+          stats uri /stats
+          stats refresh 30s
+          stats admin if TRUE
     dest: /etc/haproxy/haproxy.cfg
-    mode: '0644'
+    backup: yes
+  register: haproxy_config
 
-- name: Relancer HAProxy daemon
-  ansible.builtin.shell: |
-    pkill -x haproxy || true
-    sleep 1
-    haproxy -f /etc/haproxy/haproxy.cfg -D -p /run/haproxy.pid
-  args: { executable: /bin/bash }
+- name: Enable HAProxy service
+  ansible.builtin.service:
+    name: haproxy
+    enabled: yes
 
-- name: Test rapide depuis le LB
-  ansible.builtin.shell: |
-    for i in {1..6}; do curl -s -o /dev/null -w "web$i=%{http_code} " http://ansible-web$i/; done; echo
-  changed_when: false
+- name: Restart HAProxy if config changed
+  ansible.builtin.service:
+    name: haproxy
+    state: restarted
+  when: haproxy_config.changed
+
+- name: Start HAProxy service
+  ansible.builtin.service:
+    name: haproxy
+    state: started
+
+- name: Wait for HAProxy to be ready
+  ansible.builtin.wait_for:
+    port: 80
+    host: 0.0.0.0
+    timeout: 30
+
+- name: Wait for HAProxy stats page
+  ansible.builtin.wait_for:
+    port: 8404
+    host: 0.0.0.0
+    timeout: 30
+
+- name: Test load balancer connectivity to backend servers
+  ansible.builtin.uri:
+    url: "http://{{ item }}/"
+    method: GET
+    timeout: 10
+  loop:
+    - web1
+    - web2
+    - web3
+  register: backend_tests
+  ignore_errors: yes
+
+- name: Show backend connectivity results
+  ansible.builtin.debug:
+    msg: "Backend {{ item.item }}: {{ 'HEALTHY' if item.status == 200 else 'UNHEALTHY' }}"
+  loop: "{{ backend_tests.results }}"
+  when: backend_tests is defined
+
+- name: Test load balancer frontend
+  ansible.builtin.uri:
+    url: "http://127.0.0.1/"
+    method: GET
+    timeout: 10
+  register: frontend_test
+  retries: 3
+  delay: 5
+
+- name: Show load balancer test result
+  ansible.builtin.debug:
+    msg: "Load balancer test: {{ 'SUCCESS' if frontend_test.status == 200 else 'FAILED' }}"
+
+- name: Display HAProxy information
+  ansible.builtin.debug:
+    msg: |
+      HAProxy Load Balancer is ready!
+      
+      Access your application: http://{{ inventory_hostname }}/
+      HAProxy Stats Page: http://{{ inventory_hostname }}:8404/stats
+      
+      Load balancing configuration:
+      - Frontend: Port 80 (receives client requests)
+      - Backend: Round-robin between web1, web2, web3
+      - Health checks: Enabled on all backend servers
+      - Statistics: Available on port 8404
+      
+      Each refresh should show a different container hostname!
